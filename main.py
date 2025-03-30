@@ -1,4 +1,5 @@
 import os
+from datetime import timezone
 
 import uvicorn
 from fastapi import FastAPI, Depends
@@ -8,6 +9,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from apscheduler.schedulers.background import BackgroundScheduler
 import random
 import datetime
+import pytz
 
 import logging
 
@@ -16,6 +18,9 @@ from fastapi.middleware.cors import CORSMiddleware
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Timezone
+turkey_tz = pytz.timezone('Europe/Istanbul')
 
 # Database setup
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -56,7 +61,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[ALLOWED_ORIGINS.split(",")],
+    allow_origins=ALLOWED_ORIGINS.split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -191,13 +196,13 @@ def _set_final_place(db, selected_places):
 
 
 def _is_within_two_hours_from_now(gathering_time):
-    current_datetime = datetime.datetime.now()
+    current_datetime = datetime.datetime.now(tz=turkey_tz)
+    logger.info(f"Current time: {current_datetime}, Gathering time: {gathering_time}")
     time_difference = gathering_time - current_datetime
-    print(time_difference.total_seconds())
     return time_difference.total_seconds() <= 2 * 60 * 60
 
 scheduler = BackgroundScheduler()
-scheduler.add_job(pick_places, "cron", hour=0, minute=0)  # Pick new places and time every midnight
+scheduler.add_job(pick_places, "cron", hour=0, minute=0, timezone=turkey_tz)  # Pick new places and time every midnight
 scheduler.add_job(pick_final_place, "interval", minutes=15)  # Check every 15 minutes to pick the final place
 scheduler.start()
 
@@ -230,7 +235,7 @@ def get_choices(db: Session = Depends(get_db)):
 
 @app.get("/healthz")
 def health_check():
-    return {"status": "healthy", "timestamp": datetime.datetime.utcnow()}
+    return {"status": "healthy", "timestamp": datetime.datetime.now()}
 
 if __name__ == "__main__":
     uvicorn.run(app, reload=False, log_level=logging.INFO)

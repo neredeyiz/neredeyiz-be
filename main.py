@@ -1,60 +1,33 @@
+import json
 import os
-from datetime import timezone
 
 import uvicorn
-from fastapi import FastAPI, Depends
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, func
-from sqlalchemy.ext.declarative import declarative_base
+from fastapi import FastAPI, Depends, Query
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
-from apscheduler.schedulers.background import BackgroundScheduler
-import random
 import datetime
-import pytz
 
 import logging
 
 from fastapi.middleware.cors import CORSMiddleware
 
-# Setup logging
+from cache import cache
+from constants import TODAY_PLACES, GATHERING_TIME, FINAL_PLACE, VOTES
+from database import get_db
+from models import Base, VoteRequest
+from scheduler import create_scheduler
+from services.choices import  get_today_selection, get_places_and_gathering_time_from_db
+from services.votes import sync_votes, get_today_votes
+from utils import _is_within_two_hours_from_now
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Timezone
-turkey_tz = pytz.timezone('Europe/Istanbul')
-
-# Database setup
 DATABASE_URL = os.getenv("DATABASE_URL")
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS")
-TODAY_PLACES = "todayPlaces"
-FINAL_PLACE = "finalPlace"
-GATHERING_TIME = "gatheringTime"
+
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
-
-# Models
-class Place(Base):
-    __tablename__ = "places"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, nullable=False)
-
-
-class AvailableHour(Base):
-    __tablename__ = "available_hours"
-    id = Column(Integer, primary_key=True, index=True)
-    time = Column(String, unique=True, nullable=False)  # e.g., "18:00", "18:30", ...
-
-
-class DailySelection(Base):
-    __tablename__ = "daily_selection"
-    id = Column(Integer, primary_key=True, index=True)
-    date = Column(DateTime, default=datetime.date.today, unique=True)
-    places = Column(String)  # Comma-separated list of places
-    gathering_time = Column(DateTime, nullable=False)
-    final_place = Column(String, nullable=True)
-
-
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
@@ -67,163 +40,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory cache
-CACHE = {TODAY_PLACES: None, FINAL_PLACE: None, GATHERING_TIME: None}
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-def get_available_places(db: Session):
-    try:
-        return [place.name for place in db.query(Place).all()]
-    except Exception as e:
-        logger.error(f"Error fetching places: {e}")
-        return []
-
-def get_available_hours(db: Session):
-    try:
-        return [hour.time for hour in db.query(AvailableHour).all()]
-    except Exception as e:
-        logger.error(f"Error fetching available hours: {e}")
-        return []
-
-def get_today_selection(db: Session):
-    try:
-        return db.query(DailySelection).filter(
-            func.date(DailySelection.date) == datetime.date.today()).first()
-    except Exception as e:
-        logger.error(f"Error fetching today's selection: {e}")
-        return
-
-""" Picks 3-5 random places and a gathering time, stores in the cache and database."""
-def pick_places():
-    db = next(get_db())
-    try:
-        selected_places, gathering_time = _pick_place_and_time(*_get_available_places_and_hours(db))
-        CACHE[FINAL_PLACE] = None
-        _store_in_cache(selected_places, gathering_time)
-        _store_in_db(db, selected_places, gathering_time)
-    except Exception as e:
-        logger.error(f"Error selecting places: {e}")
-    finally:
-        db.close()
-
-def _get_available_places_and_hours(db):
-    available_places = get_available_places(db)
-    available_hours = get_available_hours(db)
-    if not available_places or not available_hours:
-        logger.error("No places or available hours found.")
-        return
-    return available_places, available_hours
-
-def _pick_place_and_time(available_places, available_hours):
-    num_places = random.randint(3, 5)
-    selected_places = random.sample(available_places, num_places)
-    gathering_time_str = random.choice(available_hours)
-    gathering_time = datetime.datetime.strptime(gathering_time_str, "%H:%M").time()
-
-    logger.info(f"Selected places for today: {selected_places}")
-    logger.info(f"Selected gathering time for today: {gathering_time}")
-
-    return selected_places, gathering_time
-
-def _store_in_cache(selected_places, gathering_time):
-    CACHE[TODAY_PLACES] = selected_places
-    CACHE[GATHERING_TIME] = gathering_time
-
-def _store_in_db(db, selected_places, gathering_time):
-    selection = DailySelection(
-        places=",".join(selected_places),
-        gathering_time=datetime.datetime.combine(datetime.date.today(), gathering_time)
-    )
-    db.add(selection)
-    db.commit()
-    db.refresh(selection)
-    db.close()
-
-""" Picks a final place 2 hours before the gathering time and updates the DB and cache."""
-def pick_final_place():
-    if CACHE[FINAL_PLACE]:
-        logger.info("Final place already selected.")
-        return
-
-    db = next(get_db())
-    selected_places, gathering_time = CACHE[TODAY_PLACES], CACHE[GATHERING_TIME]
-    if not (selected_places and gathering_time):
-        selected_places, gathering_time = _get_places_and_gathering_time_from_db(db)
-        _store_in_cache(selected_places, gathering_time)
-    if not (selected_places and gathering_time):
-        logger.error("Error getting today's selections")
-        db.close()
-        return
-
-    if _is_within_two_hours_from_now(gathering_time):
-        _set_final_place(db, selected_places)
-
-def _get_places_and_gathering_time_from_db(db):
-    try:
-        today_selection = get_today_selection(db)
-        if not today_selection:
-            logger.error("No daily selection found in DB.")
-            return
-        return today_selection.places.split(","), today_selection.gathering_time
-    except Exception as e:
-        logger.error(f"Error getting today's selection: {e}")
-        return
-
-def _set_final_place(db, selected_places):
-    try:
-        final_place = random.choice(selected_places)
-        logger.info(f"Final place selected: {final_place}")
-        CACHE[FINAL_PLACE] = final_place
-        today_selection = get_today_selection(db)
-        if today_selection:
-            today_selection.final_place = final_place
-            db.commit()
-            db.refresh(today_selection)
-        else:
-            logger.error(f"Error setting final place to database")
-    except Exception as e:
-        logger.error(f"Error setting final place to database: {e}")
-    finally:
-        db.close()
-
-
-def _is_within_two_hours_from_now(gathering_time):
-    current_datetime = datetime.datetime.now(tz=turkey_tz)
-    gathering_time = turkey_tz.localize(gathering_time)
-    logger.info(f"Current time: {current_datetime}, Gathering time: {gathering_time}")
-    time_difference = gathering_time - current_datetime
-    return time_difference.total_seconds() <= 2 * 60 * 60
-
-scheduler = BackgroundScheduler()
-scheduler.add_job(pick_places, "cron", hour=0, minute=0, timezone=turkey_tz)  # Pick new places and time every midnight
-scheduler.add_job(pick_final_place, "interval", minutes=15)  # Check every 15 minutes to pick the final place
+scheduler = create_scheduler()
 scheduler.start()
 
-""" Returns the daily selected places, gathering time, and final place if selected."""
 @app.get("/choices")
 def get_choices(db: Session = Depends(get_db)):
-    selected_places, gathering_time = CACHE[TODAY_PLACES], CACHE[GATHERING_TIME]
-    if not (selected_places and gathering_time):
-        selected_places, gathering_time = _get_places_and_gathering_time_from_db(db)
-        _store_in_cache(selected_places, gathering_time)
+    selected_places, gathering_time, votes = cache.get(TODAY_PLACES), cache.get(GATHERING_TIME), cache.get(VOTES)
+    if not (selected_places or gathering_time):
+        selected_places, gathering_time = get_places_and_gathering_time_from_db(db)
+        cache.update_places_and_time(selected_places, gathering_time)
     if not (selected_places and gathering_time):
         return {"message": "No selection made yet."}
+    if not votes:
+        votes = get_today_votes(db)
+        cache.update(VOTES, votes)
     response = {
-        TODAY_PLACES: selected_places,
-        GATHERING_TIME: gathering_time
+        TODAY_PLACES: selected_places.split(","),
+        GATHERING_TIME: gathering_time,
+        VOTES: votes
     }
-
-    # Check if final place is selected
-    if CACHE[FINAL_PLACE]:
-        response[FINAL_PLACE] = CACHE[FINAL_PLACE]
+    if final_place := cache.get(FINAL_PLACE):
+        response[FINAL_PLACE] = final_place
     else:
         if _is_within_two_hours_from_now(gathering_time):
             # Unoptimized DB query. We should not re-query the db if we already did above.
@@ -231,8 +68,20 @@ def get_choices(db: Session = Depends(get_db)):
             today_selection = get_today_selection(db)
             if today_selection and today_selection.final_place:
                 response[FINAL_PLACE] = today_selection.final_place
-                CACHE[FINAL_PLACE] = today_selection.final_place
+                cache.update(FINAL_PLACE, today_selection.final_place)
     return response
+
+@app.get("/vote")
+def vote(place_name: str = Query(..., min_length=1),
+         db: Session = Depends(get_db)):
+    if not _validate_place_name(place_name):
+        return 404
+    cache.add_vote(place_name)
+    sync_votes(db)
+    return cache.get(VOTES)
+
+def _validate_place_name(place_name: str):
+    return cache.get(TODAY_PLACES) and place_name in cache.get(TODAY_PLACES).split(",")
 
 @app.get("/healthz")
 def health_check():

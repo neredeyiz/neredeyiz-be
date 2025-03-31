@@ -5,7 +5,7 @@ import random
 import logging
 
 from cache import cache
-from constants import FINAL_PLACE, TODAY_PLACES, GATHERING_TIME
+from constants import FINAL_PLACE, TODAY_PLACES, GATHERING_TIME, turkey_tz, CACHE_DATE
 from database import get_db
 from utils import _is_within_two_hours_from_now
 from models import DailySelection, Place, AvailableHour
@@ -24,23 +24,28 @@ def get_today_selection(db: Session):
     return db.query(DailySelection).filter(
         func.date(DailySelection.date) == date.today()).first()
 
-
 def pick_places(db: Session):
+    today = datetime.today()
+    if today == cache.get(CACHE_DATE):
+        return
+    today_selection = get_today_selection(db)
+    if today_selection:
+        cache.update(CACHE_DATE, today)
+        return
     cache.reset()
     available_places = get_available_places(db)
     available_hours = get_available_hours(db)
 
     if not available_places or not available_hours:
         logger.error("No places or available hours found.")
-        return None, None
+        return
 
     num_places = random.randint(3, 5)
     selected_places = random.sample(available_places, num_places)
     gathering_time_str = random.choice(available_hours)
     gathering_time = datetime.strptime(gathering_time_str, "%H:%M").time()
-    logger.info(f"Selected places for today: {selected_places}")
-    logger.info(f"Selected gathering time for today: {gathering_time}")
-
+    logger.info(f"Selected places for today: {selected_places}, gathering time is: {gathering_time}")
+    cache.update(CACHE_DATE, today)
     return selected_places, gathering_time
 
 

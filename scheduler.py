@@ -7,7 +7,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def midnight_job():
+def place_picker():
     db = next(get_db())
     try:
         pick_places(db)
@@ -22,12 +22,12 @@ def create_scheduler():
 
     # Midnight job - pick new places
     scheduler.add_job(
-        midnight_job,
-        "cron",
+        place_picker,
+        "interval",
         hour=0,
-        minute=0,
+        minute=15,
         timezone=turkey_tz,
-        id="midnight_places_selection"
+        id="places_selection"
     )
 
     # Frequent check - pick final place

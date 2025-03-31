@@ -1,6 +1,7 @@
+from datetime import datetime
 from typing import Dict, Any
 
-from constants import TODAY_PLACES, GATHERING_TIME, FINAL_PLACE, VOTES_LAST_UPDATED, VOTES
+from constants import TODAY_PLACES, GATHERING_TIME, FINAL_PLACE, VOTES_LAST_UPDATED, VOTES, CACHE_DATE
 
 
 class DailyCache:
@@ -10,7 +11,8 @@ class DailyCache:
             GATHERING_TIME: None,
             FINAL_PLACE: None,
             VOTES: {},
-            VOTES_LAST_UPDATED: None
+            VOTES_LAST_UPDATED: None,
+            CACHE_DATE: None
         }
 
     def update_places_and_time(self, today_places: str, gathering_time: str):
@@ -30,13 +32,8 @@ class DailyCache:
         return self._cache.get(key)
 
     def reset(self):
-        self._cache = {
-            TODAY_PLACES: None,
-            GATHERING_TIME: None,
-            FINAL_PLACE: None,
-            VOTES_LAST_UPDATED: None
-        }
-
+        for key in self._cache:
+            self.update(key, None)
 
 # Singleton cache instance
 cache = DailyCache()

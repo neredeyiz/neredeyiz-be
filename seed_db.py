@@ -6,7 +6,8 @@ from datetime import datetime, date
 import random
 import datetime
 
-from main import Base, Place, AvailableHour, DailySelection
+from main import Base
+from models import Place, AvailableHour, DailySelection
 
 # SQLite database URL
 DATABASE_URL = os.getenv("DATABASE_URL")

@@ -79,6 +79,9 @@ def pick_final_place():
 def get_places_and_gathering_time_from_db(db):
     try:
         today_selection = get_today_selection(db)
+        if not today_selection:
+            pick_places(db)
+        today_selection = get_today_selection(db)
         return today_selection.places, today_selection.gathering_time
     except Exception as e:
         logger.error(f"Error getting today's selection: {e}")

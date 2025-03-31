@@ -24,7 +24,6 @@ def create_scheduler():
     scheduler.add_job(
         place_picker,
         "interval",
-        hour=0,
         minute=15,
         timezone=turkey_tz,
         id="places_selection"

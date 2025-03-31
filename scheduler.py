@@ -2,7 +2,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from database import get_db
 from services.choices import pick_places, pick_final_place
-import pytz
 import logging
 
 logger = logging.getLogger(__name__)
@@ -18,14 +17,11 @@ def place_picker():
 
 def create_scheduler():
     scheduler = BackgroundScheduler()
-    turkey_tz = pytz.timezone('Europe/Istanbul')
 
-    # Midnight job - pick new places
     scheduler.add_job(
         place_picker,
         "interval",
-        minute=15,
-        timezone=turkey_tz,
+        minutes=15,
         id="places_selection"
     )
 

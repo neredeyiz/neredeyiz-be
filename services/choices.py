@@ -45,6 +45,7 @@ def pick_places(db: Session):
     gathering_time_str = random.choice(available_hours)
     gathering_time = datetime.strptime(gathering_time_str, "%H:%M").time()
     logger.info(f"Selected places for today: {selected_places}, gathering time is: {gathering_time}")
+    store_selection(db, selected_places, gathering_time)
     cache.update(CACHE_DATE, today)
     return selected_places, gathering_time
 
